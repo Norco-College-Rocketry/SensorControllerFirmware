@@ -28,6 +28,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f0xx_hal.h"
+#include "PT_Config.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -37,14 +38,30 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 typedef enum {
-    TS_ADC = 0,
-    TS_MCU
-} Temperature_Source;
+    TELEMETRY_PACKET = 0x10,
+    COMMAND_PACKET = 0x20
+} PACKET_TYPE;
 
-typedef struct {
-    Temperature_Source source;
-    float temperature;
-} Temperature_Packet;
+typedef enum {
+  LED_COMMAND = 0x01,
+  VALVE_COMMAND = 0x02,
+  PT_CALIBRATION_COMMAND = 0x03,
+  MODE_COMMAND = 0x04
+} COMMAND_TYPE;
+
+typedef enum {
+  VOLTAGE_TELEMETRY = 0x01,
+  PRESSURE_TELEMETRY = 0x02,
+  TEMPERATURE_TELEMETRY = 0x03,
+  WEIGHT_TELEMETRY = 0x04
+} TELEMETRY_TYPE;
+
+typedef enum {
+  MODE_VOLTAGE = 0,
+  MODE_PRESSURE = 1,
+  MODE_PRESSURE_CALIBRATED = 2,
+  MODE_TEMPERATURE = 3,
+} CONVERSION_MODE;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -61,11 +78,16 @@ typedef struct {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+
+/* Create CAN telemetry packet
+ * @param label P&ID identifying label
+ * @param buf 7 byte packet buffer
+ */
+void create_float_packet(uint8_t label, PACKET_TYPE, TELEMETRY_TYPE, float value, uint8_t* buf);
+
 HAL_StatusTypeDef send_can_msg(const uint8_t *data, size_t len);
 
 float temperature_code_to_temperature(int16_t temperature_code);
-
-float to_pressure(int16_t adc_output);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

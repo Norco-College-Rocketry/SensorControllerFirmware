@@ -60,8 +60,8 @@ all: main-build
 main-build: SensorControllerFirmware.elf secondary-outputs
 
 # Tool invocations
-SensorControllerFirmware.elf SensorControllerFirmware.map: $(OBJS) $(USER_OBJS) /home/tarrem/STM32CubeIDE/workspace_1.16.0/SensorControllerFirmware/STM32F042G6UX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "SensorControllerFirmware.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"/home/tarrem/STM32CubeIDE/workspace_1.16.0/SensorControllerFirmware/STM32F042G6UX_FLASH.ld" --specs=nosys.specs -Wl,-Map="SensorControllerFirmware.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+SensorControllerFirmware.elf SensorControllerFirmware.map: $(OBJS) $(USER_OBJS) /run/media/tarrem/SOPED/NCR/workspace/SensorControllerFirmware/STM32F042G6UX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "SensorControllerFirmware.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"/run/media/tarrem/SOPED/NCR/workspace/SensorControllerFirmware/STM32F042G6UX_FLASH.ld" --specs=nosys.specs -Wl,-Map="SensorControllerFirmware.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

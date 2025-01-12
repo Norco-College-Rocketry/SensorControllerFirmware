@@ -17,33 +17,33 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
+#include <memory.h>
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "conversions.h"
 #include "ADS1118.h"
-#include <memory.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef struct {
-  int16_t max_pressure;
-  int16_t min_pressure;
-  float max_voltage;
-  float min_voltage;
-  float conversion;
-} PT_Config;
-volatile PT_Config pt = {1000, 0, 4.5f, 0.5f};
+  Ads1118TypeDef adc;
+  PT_Config pt;
+  LC_Config lc;
+  CONVERSION_MODE conv_mode;
+} SensorController;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TX_ID 0x444
+#define CAN_TX_ID 0x442
+#define PID_LABEL 01
+#define SENSOR_A_LABEL 1
+#define SENSOR_B_LABEL 2
 
-#define ENDPOINT_TEMPERATURE 15
-#define ENDPOINT_LED 23
-#define ENDPOINT_CALIBRATION 97
+#define EXCITATION 5 // Sensor excitation voltage
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,9 +61,15 @@ DMA_HandleTypeDef hdma_spi1_tx;
 TIM_HandleTypeDef htim14;
 
 /* USER CODE BEGIN PV */
-Ads1118TypeDef adc;
-volatile uint8_t start_read_adc = 0;
-volatile uint8_t adc_read_cplt = 0;
+uint8_t start_read_adc = 0;
+uint8_t adc_read_cplt = 0;
+
+SensorController controller = {
+  .pt = { 1000, 0, 4.5f, 0.5f },
+  .lc = { 100, 0.002f, EXCITATION },
+  .conv_mode = MODE_PRESSURE
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -137,11 +143,19 @@ int main(void)
   }
 
   // Configure ADC
-  adc.hspi = &hspi1;
-  adc.cs_gpio_port = ADC_CS_GPIO_Port;
-  adc.cs_pin = ADC_CS_Pin;
-  adc.config = (ADS1118_CONFIG_DEFAULT | (0b111 << ADS1118_CONFIG_BIT_MUX) | (1 << ADS1118_CONFIG_BIT_SS) | (0b000 << 9)) & 0xFBFF;
-  Ads1118_Configure(&adc);
+  controller.adc.hspi = &hspi1;
+  controller.adc.cs_gpio_port = ADC_CS_GPIO_Port;
+  controller.adc.cs_pin = ADC_CS_Pin;
+  // PT configuration
+  controller.adc.config = (ADS1118_CONFIG_DEFAULT           |
+               (0b111 << ADS1118_CONFIG_BIT_MUX) |
+               (1 << ADS1118_CONFIG_BIT_SS)      |
+               (0b000 << ADS1118_CONFIG_BIT_PGA) ) & 0xFBFF;
+  // TC configuration
+//  controller.adc.config = (ADS1118_CONFIG_DEFAULT           |
+//               (1 << ADS1118_CONFIG_BIT_SS)      |
+//               (0b111 << ADS1118_CONFIG_BIT_PGA) );
+  Ads1118_Configure(&controller.adc);
 
   // Start peripherals
 //  HAL_ADC_Start(&hadc);
@@ -151,28 +165,53 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   int16_t buf[] = { 0, 0 };
-  float v_fs = 6.144f;
-  float res = 0.0f;
 
   while (1)
   {
       if (adc_read_cplt && (!HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4))) {
     	  // Update ADC config readback
-    	  adc.config_readback = buf[1];
+    	  controller.adc.config_readback = buf[1];
+        float voltage = Ads1118_output_code_to_voltage(&controller.adc, buf[0]);
+        float res = 0.0f;
 
-    	  // Send measurement over CAN
-          res = (v_fs/(0x7FFF))*(float)buf[0]; // Convert from ADC output to voltage
-          res = 251.493315f * res - 122.744008;
-//          res = (res - pt.min_voltage) * (pt.max_pressure - pt.min_pressure) / (pt.max_voltage - pt.min_voltage); // Convert to pressure
-//          res = 100 * res / (0.002 * 5); // Convert to kg
-          send_can_msg((uint8_t*)(&res), sizeof(res));
+        switch(controller.conv_mode) {
+          case(MODE_VOLTAGE): {
+              res = voltage;
+              const uint8_t packet_size = 8;
+              uint8_t packet[packet_size];
+              create_float_packet(PID_LABEL, TELEMETRY_PACKET, VOLTAGE_TELEMETRY, res, packet);
+              send_can_msg(packet, packet_size);
+          } break;
 
-          adc_read_cplt = 0;
+          case(MODE_PRESSURE): {
+              res = convert_pressure(voltage, &controller.pt);
+              const uint8_t packet_size = 8;
+              uint8_t packet[packet_size];
+              create_float_packet(PID_LABEL, TELEMETRY_PACKET, PRESSURE_TELEMETRY, res, packet);
+              send_can_msg(packet, packet_size);
+          } break;
+
+          case(MODE_PRESSURE_CALIBRATED): {
+              res = convert_pressure_calibrated(voltage, &controller.pt);
+              const uint8_t packet_size = 8;
+              uint8_t packet[packet_size];
+              create_float_packet(PID_LABEL, TELEMETRY_PACKET, PRESSURE_TELEMETRY, res, packet);
+              send_can_msg(packet, packet_size);
+          } break;
+
+          case (MODE_TEMPERATURE): {
+            res = convert_thermocouple_K(voltage);
+          } break;
+        }
+
+        // Send measurement over CAN
+//        send_can_msg((uint8_t*)(&res), sizeof(res));
+        adc_read_cplt = 0;
       }
 
       if (start_read_adc) {
     	  // Start new single shot
-        if (Ads1118_Transmit(&adc, (uint32_t*)&buf) != HAL_OK) {
+        if (Ads1118_Transmit(&controller.adc, (uint32_t*)&buf) != HAL_OK) {
           Error_Handler();
         }
 
@@ -398,7 +437,7 @@ float temperature_code_to_temperature(int16_t temperature_code) {
 HAL_StatusTypeDef send_can_msg(const uint8_t *data, size_t len) {
     CAN_TxHeaderTypeDef header;
     header.IDE = CAN_ID_STD;
-    header.StdId = TX_ID;
+    header.StdId = CAN_TX_ID;
     header.RTR = CAN_RTR_DATA;
     header.TransmitGlobalTime = DISABLE;
     header.DLC = len;
@@ -415,30 +454,61 @@ HAL_StatusTypeDef send_can_msg(const uint8_t *data, size_t len) {
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
     CAN_RxHeaderTypeDef header;
-    uint8_t data[8];
+    uint8_t data[64];
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK) {
         Error_Handler();
     }
 
-    uint8_t msg_type = data[0];
-    switch(msg_type) {
-      case ENDPOINT_CALIBRATION: {
-        if (header.DLC == 0) {
-          // Query
-          uint16_t response[] = {pt.max_pressure, pt.min_pressure}; //TODO extended frame with voltages
-          send_can_msg((uint8_t*)response, 4);
-        } else {
-          // Command
-          int16_t max = (int16_t)(data[1] | (data[2]<<8));
-          int16_t min = (int16_t)(data[3] | (data[4]<<8));
-          pt.max_pressure = max;
-          pt.min_pressure = min;
-        }
-      } break;
+    uint8_t packet_type = data[0];
+    if (packet_type == COMMAND_PACKET) {
+      uint8_t cmd_type = data[1],
+              label = data[2];
 
-      case ENDPOINT_LED: {
-        HAL_GPIO_TogglePin(STATUS_IND_GPIO_Port, STATUS_IND_Pin);
-      } break;
+      if (label != PID_LABEL) return;
+
+      switch (cmd_type) {
+        case MODE_COMMAND: {
+          // TODO state transition - configure ADC
+          controller.conv_mode = data[3];
+        }
+          break;
+
+        case PT_CALIBRATION_COMMAND: {
+          uint8_t pt_id = data[3];
+          switch (pt_id) {
+            case 1: {
+              controller.pt.m = 263.1578f;
+              controller.pt.b = -150.3421f;
+            } break;
+            case 2: {
+              controller.pt.m = 263.1578f;
+              controller.pt.b = -146.1052f;
+            } break;
+            case 3: {
+              controller.pt.m = 256.4102f;
+              controller.pt.b = -142.0256f;
+            } break;
+            case 4: {
+              controller.pt.m = 277.7777f;
+              controller.pt.b = -152.6388f;
+            } break;
+            case 5: {
+              controller.pt.m = 277.7777f;
+              controller.pt.b = -136.4166f;
+            } break;
+          }
+        } break;
+
+        case LED_COMMAND: {
+          uint8_t state = data[3];
+          if (state == 2) {
+            HAL_GPIO_TogglePin(STATUS_IND_GPIO_Port, STATUS_IND_Pin);
+          } else {
+            HAL_GPIO_WritePin(STATUS_IND_GPIO_Port, STATUS_IND_Pin, state);
+          }
+        }
+          break;
+      }
     }
 }
 
@@ -463,6 +533,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 //    out[TS_ADC] = temperature_code_to_temperature(buf);
 
 //    send_can_msg((uint8_t*)(&buf), 4);
+}
+
+void create_float_packet(uint8_t label, PACKET_TYPE packet_type, TELEMETRY_TYPE telemetry_type, float value, uint8_t* buf) {
+    buf[0] = packet_type;
+    buf[1] = PID_LABEL;
+    buf[2] = SENSOR_B_LABEL; // TODO
+    buf[3] = telemetry_type;
+    memcpy(buf+4,&value, sizeof(value));
 }
 /* USER CODE END 4 */
 
