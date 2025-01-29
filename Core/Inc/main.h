@@ -28,7 +28,6 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f0xx_hal.h"
-#include "PT_Config.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -61,6 +60,7 @@ typedef enum {
   MODE_PRESSURE = 1,
   MODE_PRESSURE_CALIBRATED = 2,
   MODE_TEMPERATURE = 3,
+  MODE_WEIGHT = 4
 } CONVERSION_MODE;
 /* USER CODE END ET */
 
