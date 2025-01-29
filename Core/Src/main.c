@@ -557,28 +557,25 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 
       switch (cmd_type) {
         case MODE_COMMAND: {
-          // TODO state transition - configure ADC
           CONVERSION_MODE mode = data[3];
-          controller.conv_mode = mode;
           switch (mode) {
             case MODE_VOLTAGE: {
-            }
-              break;
-            case MODE_PRESSURE: {
-              case MODE_PRESSURE_CALIBRATED: {
-                controller.adc.config = pt_config;
-                Ads1118_Configure(&controller.adc);
-              }
-              break;
-              case MODE_TEMPERATURE: {
-                controller.adc.config = cjc_config;
-                Ads1118_Configure(&controller.adc);
-              }
-              break;
-              case MODE_WEIGHT: { } break;
-            }
+            } break;
+
+            case MODE_PRESSURE:
+            case MODE_PRESSURE_CALIBRATED: {
+              controller.adc.config = pt_config;
+            } break;
+
+            case MODE_TEMPERATURE: {
+              controller.adc.config = cjc_config;
+            } break;
+
+            case MODE_WEIGHT: {
+            } break;
           }
-        } break;
+          controller.conv_mode = mode;
+        }
 
         case PT_CALIBRATION_COMMAND: {
           uint8_t pt_id = data[3];
