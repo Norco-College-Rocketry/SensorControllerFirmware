@@ -86,7 +86,7 @@ float Ads1118_full_scale_range(const Ads1118TypeDef *hads) {
 }
 
 // Convert from ADC output to voltage
-float Ads1118_output_code_to_voltage(const Ads1118TypeDef *hads, uint16_t code) {
+float Ads1118_output_code_to_voltage(const Ads1118TypeDef *hads, int16_t code) {
   float v_fs = Ads1118_full_scale_range(hads);
   return (v_fs/(ADS1118_MAX_OUTPUT_CODE)) * (float)code;
 }
