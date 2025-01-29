@@ -33,6 +33,7 @@ typedef struct {
   PT_Config pt;
   LC_Config lc;
   CONVERSION_MODE conv_mode;
+  float cjc;
 } SensorController;
 /* USER CODE END PTD */
 
@@ -71,6 +72,18 @@ SensorController controller = {
   .lc = { 100, 0.002f, EXCITATION },
   .conv_mode = MODE_TEMPERATURE
 };
+
+uint32_t pt_config = (ADS1118_CONFIG_DEFAULT           |
+               (0b111 << ADS1118_CONFIG_BIT_MUX) |
+               (1 << ADS1118_CONFIG_BIT_SS)      |
+               (0b000 << ADS1118_CONFIG_BIT_PGA) ) & 0xFBFF;
+uint32_t tc_config = (ADS1118_CONFIG_DEFAULT           |
+                      (1 << ADS1118_CONFIG_BIT_SS)      |
+                      (0b011 << ADS1118_CONFIG_BIT_MUX) |
+                      (0b111 << ADS1118_CONFIG_BIT_PGA) );
+uint32_t cjc_config = (ADS1118_CONFIG_DEFAULT           |
+                       (1 << ADS1118_CONFIG_BIT_SS)      |
+                       (ADS1118_TS_MODE_TEMPERATURE << ADS1118_CONFIG_BIT_TS_MODE) );
 
 /* USER CODE END PV */
 
@@ -150,20 +163,8 @@ int main(void)
   controller.adc.hspi = &hspi1;
   controller.adc.cs_gpio_port = ADC_CS_GPIO_Port;
   controller.adc.cs_pin = ADC_CS_Pin;
-  // PT configuration
-//  controller.adc.config = (ADS1118_CONFIG_DEFAULT           |
-//               (0b111 << ADS1118_CONFIG_BIT_MUX) |
-//               (1 << ADS1118_CONFIG_BIT_SS)      |
-//               (0b000 << ADS1118_CONFIG_BIT_PGA) ) & 0xFBFF;
-  // TC configuration
-  controller.adc.config = (ADS1118_CONFIG_DEFAULT           |
-                          (1 << ADS1118_CONFIG_BIT_SS)      |
-			                    (0b011 << ADS1118_CONFIG_BIT_MUX) |
-                          (0b111 << ADS1118_CONFIG_BIT_PGA) );
-  // ADC temperature configuration
-//  controller.adc.config = (ADS1118_CONFIG_DEFAULT           |
-//               (1 << ADS1118_CONFIG_BIT_SS)      |
-//               (ADS1118_TS_MODE_TEMPERATURE << ADS1118_CONFIG_BIT_TS_MODE) );
+
+  controller.adc.config = cjc_config;
   if (Ads1118_Configure(&controller.adc) != HAL_OK) {
     Error_Handler();
   }
@@ -211,12 +212,22 @@ int main(void)
           } break;
 
           case (MODE_TEMPERATURE): {
-            float cjc = 22.5f * ( (4.096f/1000) / 100 ); // TODO read CJC temp from on-board sensor
-            res = convert_thermocouple_K(voltage+cjc);
+            if (controller.adc.config_readback & (0b1 << ADS1118_CONFIG_BIT_TS_MODE)) {
+              controller.cjc = temperature_code_to_temperature((int16_t)(buf[0]>>2));
+              controller.cjc *= ( (4.096f/1000) / 100 );
 
-            uint8_t packet[8];
-            create_float_packet(PID_LABEL, TELEMETRY_PACKET, TEMPERATURE_TELEMETRY, res, packet);
-            send_can_msg(packet, 8);
+              controller.adc.config = tc_config;
+              Ads1118_Configure(&controller.adc);
+            } else {
+              res = convert_thermocouple_K(voltage+controller.cjc);
+              uint8_t packet[8];
+
+              create_float_packet(PID_LABEL, TELEMETRY_PACKET, TEMPERATURE_TELEMETRY, res, packet);
+              send_can_msg(packet, 8);
+
+              controller.adc.config = cjc_config;
+              Ads1118_Configure(&controller.adc);
+            }
           } break;
 
           case (MODE_WEIGHT): {
@@ -228,6 +239,7 @@ int main(void)
         }
 
         adc_read_cplt = 0;
+        HAL_GPIO_WritePin(STATUS_IND_GPIO_Port, STATUS_IND_Pin, GPIO_PIN_RESET);
       }
 
       if (start_read_adc) {
@@ -546,9 +558,27 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
       switch (cmd_type) {
         case MODE_COMMAND: {
           // TODO state transition - configure ADC
-          controller.conv_mode = data[3];
-        }
-          break;
+          CONVERSION_MODE mode = data[3];
+          controller.conv_mode = mode;
+          switch (mode) {
+            case MODE_VOLTAGE: {
+            }
+              break;
+            case MODE_PRESSURE: {
+              case MODE_PRESSURE_CALIBRATED: {
+                controller.adc.config = pt_config;
+                Ads1118_Configure(&controller.adc);
+              }
+              break;
+              case MODE_TEMPERATURE: {
+                controller.adc.config = cjc_config;
+                Ads1118_Configure(&controller.adc);
+              }
+              break;
+              case MODE_WEIGHT: { } break;
+            }
+          }
+        } break;
 
         case PT_CALIBRATION_COMMAND: {
           uint8_t pt_id = data[3];
@@ -595,21 +625,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   start_read_adc = 1;
-//    should_read_adc = 1;
-
-//    float out[2];
-//    uint32_t buf;
-
-//    buf = HAL_ADC_GetValue(&hadc);
-//    out[TS_MCU] = __LL_ADC_CALC_TEMPERATURE(3300, buf, LL_ADC_RESOLUTION_12B);
-
-//  uint16_t adc_config = ADS1118_CONFIG_DEFAULT | (0b100 << ADS1118_CONFIG_BIT_MUX) | (1 << ADS1118_CONFIG_BIT_SS);
-//    if (Ads1118_Transmit(&adc_config, &hspi1, &buf, 1000) != HAL_OK) {
-//        Error_Handler();
-//    }
-//    out[TS_ADC] = temperature_code_to_temperature(buf);
-
-//    send_can_msg((uint8_t*)(&buf), 4);
+  HAL_GPIO_WritePin(STATUS_IND_GPIO_Port, STATUS_IND_Pin, GPIO_PIN_SET);
 }
 
 void create_float_packet(uint8_t label, PACKET_TYPE packet_type, TELEMETRY_TYPE telemetry_type, float value, uint8_t* buf) {
@@ -633,7 +649,6 @@ void Error_Handler(void)
   while (1)
   {
 	  HAL_GPIO_TogglePin(WARN_IND_GPIO_Port, WARN_IND_Pin);
-	  HAL_GPIO_TogglePin(STATUS_IND_GPIO_Port, STATUS_IND_Pin);
 	  HAL_Delay(100);
   }
   /* USER CODE END Error_Handler_Debug */
